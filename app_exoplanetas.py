@@ -42,7 +42,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Título principal
-st.markdown('<h2 class="main-header">Análisis de Exoplanetas Habitables</h2>', unsafe_allow_html=True)
+st.markdown('<h2 class="main-header"> 🪐 Análisis de Exoplanetas Habitables</h2>', unsafe_allow_html=True)
 
 # Sidebar
 with st.sidebar:
@@ -52,6 +52,8 @@ with st.sidebar:
     pagina = st.radio(
         "",
         ["📊 Dataset de Exoplanetas",
+         "🏠 Índice de Habitabilidad",
+         "🎯 Vector de Referencia",
          "🔍 Exploración de Datos",
          "🌡️ Análisis de Temperatura",
          "⭐ Características Estelares"]
@@ -208,11 +210,61 @@ def gestionar_outliers(df_work):
 
     return df_wins
 
+@st.cache_data
+def Calcular_indices_habitabilidad(df_final, reference_vector):
+    vector_referencia = pd.Series(reference_vector)[num_cols]
+    p01 = df_final[num_cols].quantile(0.01)
+    p99 = df_final[num_cols].quantile(0.99)
+    rango_tipico = p99 - p01
+    
+    df_rankingExoplanetas = df_final.copy()
+    
+    for col in num_cols:
+        x_ref = vector_referencia[col]
+        rango = rango_tipico[col]
+        df_rankingExoplanetas[col] = (df_rankingExoplanetas[col] - x_ref) / rango
+    
+    df_rankingExoplanetas['distancia_tierra'] = np.sqrt((df_rankingExoplanetas[num_cols].abs() ** 2).sum(axis=1))
+    df_rankingExoplanetas['indice_habitabilidad'] = 1 / (1 + df_rankingExoplanetas['distancia_tierra'])
+    df_rankingExoplanetas["orig_idx"] = df_rankingExoplanetas.index
+    df_rankingExoplanetas = df_rankingExoplanetas.sort_values('indice_habitabilidad', ascending=False).reset_index(drop=True)
+    df_rankingExoplanetas.insert(0, 'ranking', range(1, len(df_rankingExoplanetas) + 1))
+
+    return df_rankingExoplanetas
+
 # Cargar datos
 df_nasa = cargar_datos()
 df_reduced, num_cols = procesar_datos(df_nasa)
 df_work = imputar_datos(df_reduced, num_cols)
 df_final = gestionar_outliers(df_work)
+
+# Valores de referencia por defecto (Tierra)
+default_earth_values = {
+    "pl_orbper": 365.25,
+    "pl_orbsmax": 1.0,
+    "pl_orbeccen": 0.0167,
+    "pl_rade": 1.0,
+    "pl_bmasse": 1.0,
+    "pl_dens": 5.51,
+    "pl_eqt": 255.0,
+    "pl_insol": 1.0,
+    "st_teff": 5778.0,
+    "st_lum": 0.0,
+    "st_mass": 1.0,
+    "st_rad": 1.0,
+    "st_met": 0.0,
+    "st_logg": 4.44,
+    "st_age": 4.6
+}
+
+# Inicializar session_state para vector de referencia
+if 'earth_values' not in st.session_state:
+    st.session_state.earth_values = default_earth_values.copy()
+
+if 'df_rankingExoplanetas' not in st.session_state:
+    st.session_state.df_rankingExoplanetas = Calcular_indices_habitabilidad(df_final, st.session_state.earth_values)
+
+df_rankingExoplanetas = st.session_state.df_rankingExoplanetas
 
 nombres_columnas = {
     'objectid': 'ID NASA',
@@ -236,6 +288,16 @@ nombres_columnas = {
 }
 
 nombres_tecnicos = {v: k for k, v in nombres_columnas.items()}
+
+# Diccionarios extendidos para el ranking de habitabilidad
+nombres_columnas_ranking = {
+    **nombres_columnas,
+    'ranking': 'Orden',
+    'indice_habitabilidad': 'Índice de Habitabilidad',
+    'distancia_tierra': 'Distancia a la Tierra (normalizada)'
+}
+
+nombres_tecnicos_ranking = {v: k for k, v in nombres_columnas_ranking.items()}
 
 # ==================== PÁGINAS ====================
 
@@ -538,6 +600,501 @@ if pagina == "📊 Dataset de Exoplanetas":
     
     else:
         st.warning("⚠️ No se encontraron resultados. Ajusta los filtros.")
+
+elif pagina == "🏠 Índice de Habitabilidad":
+    if 'filtros_ranking' not in st.session_state:
+        st.session_state.filtros_ranking = []
+    
+    df_filtrado = df_rankingExoplanetas.copy()
+    
+    for idx, filtro in enumerate(st.session_state.filtros_ranking):
+        if f"campo_rank_{idx}" in st.session_state:
+            campo_seleccionado = st.session_state[f"campo_rank_{idx}"]
+            filtro['campo'] = nombres_tecnicos_ranking.get(campo_seleccionado, campo_seleccionado)
+        
+        if f"operador_rank_{idx}" in st.session_state and filtro['campo'] not in ['pl_name', 'hostname']:
+            operadores = {
+                'Igual a (=)': '==',
+                'Mayor que (>)': '>',
+                'Mayor o igual (≥)': '>=',
+                'Menor que (<)': '<',
+                'Menor o igual (≤)': '<='
+            }
+            filtro['operador'] = operadores.get(st.session_state[f"operador_rank_{idx}"], filtro['operador'])
+        
+        if f"valor_rank_{idx}" in st.session_state:
+            filtro['valor'] = st.session_state[f"valor_rank_{idx}"]
+    
+    for filtro in st.session_state.filtros_ranking:
+        campo = filtro['campo']
+        operador = filtro['operador']
+        valor = filtro['valor']
+        
+        if campo in df_filtrado.columns:
+            if operador == 'contiene':
+                if valor:
+                    df_filtrado = df_filtrado[
+                        df_filtrado[campo].str.contains(str(valor), case=False, na=False)
+                    ]
+            elif operador == '==':
+                df_filtrado = df_filtrado[df_filtrado[campo] == valor]
+            elif operador == '>':
+                df_filtrado = df_filtrado[df_filtrado[campo] > valor]
+            elif operador == '>=':
+                df_filtrado = df_filtrado[df_filtrado[campo] >= valor]
+            elif operador == '<':
+                df_filtrado = df_filtrado[df_filtrado[campo] < valor]
+            elif operador == '<=':
+                df_filtrado = df_filtrado[df_filtrado[campo] <= valor]
+    
+    if len(df_filtrado) > 0:
+        tab1, tab2, tab3, tab4 = st.tabs(["📋 Datos", "📊 Análisis del índice", "📈 Distribución y boxplot", "🔗 Relaciones"])
+        
+        with tab1:
+            col_titulo, col_agregar, col_limpiar = st.columns([4, 1.5, 1.5])
+            with col_titulo:
+                st.subheader("🔍 Filtros Avanzados")
+            
+            with col_agregar:
+                if st.button("➕ Agregar Filtro", key="add_filter_rank", use_container_width=True):
+                    st.session_state.filtros_ranking.append({
+                        'campo': 'pl_name',
+                        'operador': 'contiene',
+                        'valor': ''
+                    })
+                    st.rerun()
+            
+            with col_limpiar:
+                if st.button("🗑️ Limpiar Todo", key="clear_filters_rank", use_container_width=True):
+                    st.session_state.filtros_ranking = []
+                    st.rerun()
+            
+            if len(st.session_state.filtros_ranking) > 0:
+                st.markdown("**Filtros activos:**")
+                
+                filtros_a_eliminar = []
+                
+                for idx, filtro in enumerate(st.session_state.filtros_ranking):
+                    campo_actual = filtro['campo']
+                    es_texto = campo_actual in ['pl_name', 'hostname']
+                    if es_texto:
+                        resumen = f"🔹 Filtro {idx + 1}: {nombres_columnas_ranking.get(campo_actual, campo_actual)} contiene '{filtro['valor']}'"
+                    else:
+                        resumen = f"🔹 Filtro {idx + 1}: {nombres_columnas_ranking.get(campo_actual, campo_actual)} {filtro['operador']} {filtro['valor']}"
+                    
+                    with st.expander(resumen, expanded=True):
+                        col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+                        
+                        with col1:
+                            campos_texto = ['pl_name', 'hostname']
+                            campos_numericos_ranking = ['ranking', 'indice_habitabilidad', 'distancia_tierra'] + num_cols
+                            campos_disponibles = campos_texto + campos_numericos_ranking
+                            campos_disponibles_natural = [nombres_columnas_ranking.get(col, col) for col in campos_disponibles]
+                            campo_actual_natural = nombres_columnas_ranking.get(filtro['campo'], filtro['campo'])
+                            
+                            campo_seleccionado = st.selectbox(
+                                "Campo:",
+                                options=campos_disponibles_natural,
+                                index=campos_disponibles_natural.index(campo_actual_natural) if campo_actual_natural in campos_disponibles_natural else 0,
+                                key=f"campo_rank_{idx}"
+                            )
+                            nuevo_campo = nombres_tecnicos_ranking.get(campo_seleccionado, campo_seleccionado)
+                            
+                            campo_anterior = filtro.get('campo')
+                            es_texto_anterior = campo_anterior in ['pl_name', 'hostname']
+                            es_texto_nuevo = nuevo_campo in ['pl_name', 'hostname']
+                            
+                            if campo_anterior != nuevo_campo and es_texto_anterior != es_texto_nuevo:
+                                if es_texto_nuevo:
+                                    filtro['valor'] = ''
+                                    filtro['operador'] = 'contiene'
+                                else:
+                                    filtro['valor'] = 0.0
+                                    filtro['operador'] = '>='
+                            
+                            filtro['campo'] = nuevo_campo
+                        
+                        campo_tecnico = filtro['campo']
+                        es_campo_texto = campo_tecnico in ['pl_name', 'hostname']
+                        
+                        with col2:
+                            if es_campo_texto:
+                                st.text_input(
+                                    "Operador:",
+                                    value="contiene",
+                                    disabled=True,
+                                    key=f"operador_rank_{idx}"
+                                )
+                                filtro['operador'] = 'contiene'
+                            else:
+                                operadores = {
+                                    'Igual a (=)': '==',
+                                    'Mayor que (>)': '>',
+                                    'Mayor o igual (≥)': '>=',
+                                    'Menor que (<)': '<',
+                                    'Menor o igual (≤)': '<='
+                                }
+                                
+                                operador_filtro = filtro.get('operador', '>=')
+                                if operador_filtro == 'contiene':
+                                    operador_filtro = '>='
+                                
+                                operador_actual = [k for k, v in operadores.items() if v == operador_filtro]
+                                operador_actual = operador_actual[0] if operador_actual else 'Mayor o igual (≥)'
+                                
+                                operador_seleccionado = st.selectbox(
+                                    "Operador:",
+                                    options=list(operadores.keys()),
+                                    index=list(operadores.keys()).index(operador_actual) if operador_actual in list(operadores.keys()) else 0,
+                                    key=f"operador_rank_{idx}"
+                                )
+                                filtro['operador'] = operadores[operador_seleccionado]
+                        
+                        with col3:
+                            if campo_tecnico in df_rankingExoplanetas.columns:
+                                if es_campo_texto:
+                                    valor = st.text_input(
+                                        "Valor:",
+                                        value=str(filtro.get('valor', '')),
+                                        placeholder="Escribe para buscar...",
+                                        key=f"valor_rank_{idx}"
+                                    )
+                                    filtro['valor'] = valor
+                                else:
+                                    max_val = float(df_rankingExoplanetas[campo_tecnico].max())
+                                    
+                                    try:
+                                        valor_actual = float(filtro.get('valor', 0.0))
+                                    except (ValueError, TypeError):
+                                        valor_actual = 0.0
+                                    valor_actual = max(0.0, min(max_val, valor_actual))
+                                    
+                                    valor = st.number_input(
+                                        "Valor:",
+                                        min_value=0.0,
+                                        max_value=max_val,
+                                        value=valor_actual,
+                                        key=f"valor_rank_{idx}",
+                                        format="%.4f" if campo_tecnico in ['indice_habitabilidad', 'distancia_tierra'] else "%.2f"
+                                    )
+                                    filtro['valor'] = valor
+                        
+                        with col4:
+                            if st.button("❌", key=f"eliminar_rank_{idx}", help="Eliminar este filtro"):
+                                filtros_a_eliminar.append(idx)
+                
+                if filtros_a_eliminar:
+                    for idx in sorted(filtros_a_eliminar, reverse=True):
+                        st.session_state.filtros_ranking.pop(idx)
+                    st.rerun()
+            else:
+                st.info("💡 Haz clic en '➕ Agregar Filtro' para crear filtros personalizados")
+            
+            st.markdown("---")
+            
+            # Mostrar solo columnas principales del ranking
+            columnas_principales = ['ranking', 'pl_name', 'hostname', 'indice_habitabilidad', 'distancia_tierra']
+            
+            df_mostrar = df_filtrado[columnas_principales].copy()
+            df_mostrar = df_mostrar.rename(columns=nombres_columnas_ranking)
+            
+            column_config = {
+                nombres_columnas_ranking['ranking']: st.column_config.NumberColumn(
+                    nombres_columnas_ranking['ranking'],
+                    width="small",
+                    pinned=True
+                )
+            }
+            
+            st.dataframe(
+                df_mostrar,
+                use_container_width=True,
+                height=650,
+                column_config=column_config,
+                hide_index=True
+            )
+            
+            st.caption(f"🏆 Mostrando **{len(df_filtrado)}** de {len(df_rankingExoplanetas)} exoplanetas | "
+                      f"⭐ {df_filtrado['hostname'].nunique()} estrellas únicas | "
+                      f"🎯 Índice promedio: {df_filtrado['indice_habitabilidad'].mean():.4f}")
+        
+        with tab2:
+            st.subheader("📊 Análisis del Índice de Habitabilidad")
+            
+            fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+            
+            axes[0].plot(df_filtrado['ranking'], df_filtrado['indice_habitabilidad'], 
+                         linewidth=1.5, color='steelblue', alpha=0.8)
+            axes[0].set_xlabel('Posición en el ranking', fontsize=11)
+            axes[0].set_ylabel('Índice de habitabilidad', fontsize=11)
+            axes[0].set_title('Decaimiento del índice de habitabilidad a lo largo del ranking', fontsize=12)
+            axes[0].grid(alpha=0.3)
+            axes[0].axhline(y=df_filtrado['indice_habitabilidad'].median(), 
+                            color='red', linestyle='--', linewidth=1.5, label='Mediana')
+            axes[0].legend()
+            
+            top_100 = df_filtrado.head(100)
+            axes[1].plot(top_100['ranking'], top_100['indice_habitabilidad'], 
+                         linewidth=2, color='darkgreen', marker='o', markersize=3, alpha=0.7)
+            axes[1].set_xlabel('Posición en el ranking', fontsize=11)
+            axes[1].set_ylabel('Índice de habitabilidad', fontsize=11)
+            axes[1].set_title('Top 100 exoplanetas más habitables (detalle)', fontsize=12)
+            axes[1].grid(alpha=0.3)
+            
+            plt.tight_layout()
+            st.pyplot(fig)
+        
+        with tab3:
+            st.subheader("📈 Distribución del Índice")
+            
+            fig2, axes2 = plt.subplots(1, 2, figsize=(14, 5))
+            
+            indice = df_filtrado['indice_habitabilidad']
+            
+            sns.histplot(indice, bins=40, kde=True, ax=axes2[0], 
+                        color='#0072B2', edgecolor='black', alpha=0.7,
+                        line_kws={'linewidth': 3})
+            axes2[0].set_title("Distribución del Índice de Habitabilidad", fontweight='bold')
+            axes2[0].set_xlabel("Índice", fontsize=11)
+            axes2[0].set_ylabel("Frecuencia", fontsize=11)
+            axes2[0].grid(alpha=0.3)
+            
+            sns.boxplot(x=indice, ax=axes2[1], color='#56B4E9')
+            axes2[1].set_title("Boxplot del Índice", fontweight='bold')
+            axes2[1].set_xlabel("Índice", fontsize=11)
+            axes2[1].grid(alpha=0.3, axis='x')
+            
+            plt.tight_layout()
+            st.pyplot(fig2)
+        
+        with tab4:
+            st.subheader("🔗 Relaciones Bivariantes")
+            
+            # Paleta de colores Okabe-Ito
+            okabe_ito_colors = [
+                '#E69F00',  # Naranja
+                '#56B4E9',  # Azul cielo
+                '#009E73',  # Verde
+                '#F0E442',  # Amarillo
+                '#0072B2',  # Azul
+                '#D55E00',  # Naranja rojizo
+                '#CC79A7',  # Rosa
+            ]
+            
+            fig3, axes3 = plt.subplots(2, 2, figsize=(14, 10))
+            
+            axes3[0, 0].scatter(df_filtrado["pl_rade"],
+                              df_filtrado["indice_habitabilidad"], 
+                              alpha=0.6, color=okabe_ito_colors[4], s=40, edgecolors='black', linewidth=0.5)
+            axes3[0, 0].set_xlabel("Radio Planetario", fontsize=11)
+            axes3[0, 0].set_ylabel("Índice de habitabilidad", fontsize=11)
+            axes3[0, 0].set_title("Índice vs Radio Planetario", fontweight='bold')
+            axes3[0, 0].grid(alpha=0.3)
+            
+            axes3[0, 1].scatter(df_filtrado["pl_insol"],
+                              df_filtrado["indice_habitabilidad"], 
+                              alpha=0.6, color=okabe_ito_colors[2], s=40, edgecolors='black', linewidth=0.5)
+            axes3[0, 1].set_xlabel("Radiación recibida", fontsize=11)
+            axes3[0, 1].set_ylabel("Índice de habitabilidad", fontsize=11)
+            axes3[0, 1].set_title("Índice vs Radiación Recibida", fontweight='bold')
+            axes3[0, 1].grid(alpha=0.3)
+            
+            axes3[1, 0].scatter(df_filtrado["st_teff"],
+                              df_filtrado["indice_habitabilidad"], 
+                              alpha=0.6, color=okabe_ito_colors[0], s=40, edgecolors='black', linewidth=0.5)
+            axes3[1, 0].set_xlabel("Temperatura superficial de la estrella", fontsize=11)
+            axes3[1, 0].set_ylabel("Índice de habitabilidad", fontsize=11)
+            axes3[1, 0].set_title("Índice vs Temperatura Estelar", fontweight='bold')
+            axes3[1, 0].grid(alpha=0.3)
+            
+            axes3[1, 1].scatter(df_filtrado["pl_eqt"],
+                              df_filtrado["indice_habitabilidad"], 
+                              alpha=0.6, color=okabe_ito_colors[5], s=40, edgecolors='black', linewidth=0.5)
+            axes3[1, 1].set_xlabel("Temperatura de equilibrio", fontsize=11)
+            axes3[1, 1].set_ylabel("Índice de habitabilidad", fontsize=11)
+            axes3[1, 1].set_title("Índice vs Temperatura de Equilibrio", fontweight='bold')
+            axes3[1, 1].grid(alpha=0.3)
+            
+            plt.tight_layout()
+            st.pyplot(fig3)
+    
+    else:
+        st.warning("⚠️ No se encontraron resultados. Ajusta los filtros.")
+
+elif pagina == "🎯 Vector de Referencia":
+    st.subheader("🎯 Configuración del vector de referencia para el cálculo del índice de habitabilidad")
+    
+    st.markdown("---")
+    
+    col_reset, col_recalc = st.columns([1, 1])
+    
+    with col_reset:
+        if st.button("🔄 Restaurar Valores de la Tierra", use_container_width=True):
+            st.session_state.earth_values = default_earth_values.copy()
+            st.rerun()
+    
+    with col_recalc:
+        if st.button("🔬 Recalcular Índice de Habitabilidad", type="primary", use_container_width=True):
+            with st.spinner("Recalculando índices de habitabilidad..."):
+                st.session_state.df_rankingExoplanetas = Calcular_indices_habitabilidad(
+                    df_final, 
+                    st.session_state.earth_values
+                )
+            st.success("✅ Índice recalculado exitosamente")
+            st.rerun()
+    
+    st.markdown("---")
+    
+    # Organizar los valores en categorías
+    st.subheader("🪐 Parámetros Orbitales")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.session_state.earth_values["pl_orbper"] = st.number_input(
+            "Periodo Orbital (días)",
+            value=float(st.session_state.earth_values["pl_orbper"]),
+            min_value=0.0,
+            format="%.2f",
+            help="Tiempo que tarda el planeta en completar una órbita"
+        )
+    
+    with col2:
+        st.session_state.earth_values["pl_orbsmax"] = st.number_input(
+            "Distancia Orbital (AU)",
+            value=float(st.session_state.earth_values["pl_orbsmax"]),
+            min_value=0.0,
+            format="%.4f",
+            help="Distancia media del planeta a su estrella en Unidades Astronómicas"
+        )
+    
+    with col3:
+        st.session_state.earth_values["pl_orbeccen"] = st.number_input(
+            "Excentricidad Orbital",
+            value=float(st.session_state.earth_values["pl_orbeccen"]),
+            min_value=0.0,
+            max_value=1.0,
+            format="%.4f",
+            help="Medida de cuánto se desvía la órbita de ser circular (0=circular, 1=muy elíptica)"
+        )
+    
+    st.markdown("---")
+    st.subheader("🌍 Parámetros Planetarios")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.session_state.earth_values["pl_rade"] = st.number_input(
+            "Radio del Planeta (R⊕)",
+            value=float(st.session_state.earth_values["pl_rade"]),
+            min_value=0.0,
+            format="%.4f",
+            help="Radio del planeta en radios terrestres"
+        )
+    
+    with col2:
+        st.session_state.earth_values["pl_bmasse"] = st.number_input(
+            "Masa del Planeta (M⊕)",
+            value=float(st.session_state.earth_values["pl_bmasse"]),
+            min_value=0.0,
+            format="%.4f",
+            help="Masa del planeta en masas terrestres"
+        )
+    
+    with col3:
+        st.session_state.earth_values["pl_dens"] = st.number_input(
+            "Densidad (g/cm³)",
+            value=float(st.session_state.earth_values["pl_dens"]),
+            min_value=0.0,
+            format="%.2f",
+            help="Densidad media del planeta"
+        )
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.session_state.earth_values["pl_eqt"] = st.number_input(
+            "Temperatura de Equilibrio (K)",
+            value=float(st.session_state.earth_values["pl_eqt"]),
+            min_value=0.0,
+            format="%.1f",
+            help="Temperatura de equilibrio del planeta"
+        )
+    
+    with col2:
+        st.session_state.earth_values["pl_insol"] = st.number_input(
+            "Radiación Recibida",
+            value=float(st.session_state.earth_values["pl_insol"]),
+            min_value=0.0,
+            format="%.4f",
+            help="Flujo de radiación recibida (relativo a la Tierra)"
+        )
+    
+    st.markdown("---")
+    st.subheader("⭐ Parámetros Estelares")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.session_state.earth_values["st_teff"] = st.number_input(
+            "Temperatura Estelar (K)",
+            value=float(st.session_state.earth_values["st_teff"]),
+            min_value=0.0,
+            format="%.1f",
+            help="Temperatura efectiva de la estrella"
+        )
+    
+    with col2:
+        st.session_state.earth_values["st_mass"] = st.number_input(
+            "Masa Estelar (M☉)",
+            value=float(st.session_state.earth_values["st_mass"]),
+            min_value=0.0,
+            format="%.4f",
+            help="Masa de la estrella en masas solares"
+        )
+    
+    with col3:
+        st.session_state.earth_values["st_rad"] = st.number_input(
+            "Radio Estelar (R☉)",
+            value=float(st.session_state.earth_values["st_rad"]),
+            min_value=0.0,
+            format="%.4f",
+            help="Radio de la estrella en radios solares"
+        )
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.session_state.earth_values["st_lum"] = st.number_input(
+            "Luminosidad Estelar (log)",
+            value=float(st.session_state.earth_values["st_lum"]),
+            format="%.4f",
+            help="Logaritmo de la luminosidad estelar"
+        )
+    
+    with col2:
+        st.session_state.earth_values["st_met"] = st.number_input(
+            "Metalicidad Estelar [Fe/H]",
+            value=float(st.session_state.earth_values["st_met"]),
+            format="%.4f",
+            help="Metalicidad de la estrella relativa al Sol"
+        )
+    
+    with col3:
+        st.session_state.earth_values["st_logg"] = st.number_input(
+            "Gravedad Superficial (log g)",
+            value=float(st.session_state.earth_values["st_logg"]),
+            min_value=0.0,
+            format="%.2f",
+            help="Logaritmo de la gravedad superficial estelar"
+        )
+    
+    st.session_state.earth_values["st_age"] = st.number_input(
+        "Edad Estelar (Gyr)",
+        value=float(st.session_state.earth_values["st_age"]),
+        min_value=0.0,
+        format="%.2f",
+        help="Edad de la estrella en miles de millones de años"
+    )
 
 elif pagina == "🔍 Exploración de Datos":
     st.subheader("Selecciona variables para analizar")

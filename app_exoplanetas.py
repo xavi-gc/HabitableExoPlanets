@@ -36,6 +36,78 @@ st.markdown("""
     .main > div {
         padding-top: 1rem;
     }
+    
+    /* Estilos del Sidebar */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1e3a5f 0%, #0e1117 100%);
+    }
+    
+    /* Título de Navegación */
+    [data-testid="stSidebar"] h1 {
+        color: #0072B2 !important;
+        font-weight: 700;
+        font-size: 1.8rem;
+        margin-bottom: 1.5rem;
+        text-align: center;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        padding-right: 4rem;
+    }
+    
+    .st-emotion-cache-1kss9tm {
+        background: linear-gradient(180deg, #dceefb 0%, #f0f4f8 100%);
+    }
+    .st-emotion-cache-1fge4g4 {
+        color: rgba(0, 62, 126, 0.9);
+    }
+    
+    [data-testid="stSidebar"] .stRadio > div > label {
+        background: transparent;
+        padding: 10px 16px;
+        margin: 2px 0;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        border-left: 3px solid transparent;
+        display: flex;
+        align-items: center;
+        font-weight: 500;
+        color: rgba(255, 255, 255, 0.8);
+    }
+    
+    /* Hover en opciones del menú */
+    [data-testid="stSidebar"] .stRadio > div > label:hover {
+        color: #56B4E9;
+        border-left-color: rgba(86, 180, 233, 0.5);
+        padding-left: 20px;
+        background: linear-gradient(90deg, rgba(86, 180, 233, 0.1) 0%, transparent 100%);
+    }
+    
+    /* Opción seleccionada */
+    [data-testid="stSidebar"] .stRadio > div > label[data-baseweb="radio"] > div:first-child {
+        background-color: #56B4E9;
+    }
+    
+    /* Texto de la opción seleccionada */
+    [data-testid="stSidebar"] .stRadio > div > label:has(div[data-baseweb="radio"] > div:first-child[style*="background"]) {
+        color: #56B4E9;
+        border-left-color: #56B4E9;
+        border-left-width: 4px;
+        font-weight: 600;
+        padding-left: 20px;
+        background: linear-gradient(90deg, rgba(86, 180, 233, 0.15) 0%, transparent 100%);
+    }
+    
+    /* Separador */
+    [data-testid="stSidebar"] hr {
+        margin: 1.5rem 0;
+        border: none;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, #56B4E9, transparent);
+    }
+    
+    /* Radio button circle oculto */
+    [data-testid="stSidebar"] .stRadio > div > label > div:first-child {
+        display: none;
+    }
     </style>
 """, unsafe_allow_html=True)
 

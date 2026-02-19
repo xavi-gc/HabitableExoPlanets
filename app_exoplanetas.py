@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 
-# Configuración de la página
 st.set_page_config(
     page_title="Exoplanetas Habitables",
     page_icon="🪐",
@@ -14,7 +13,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Estilos personalizados
 st.markdown("""
     <style>
     .main-header {
@@ -41,7 +39,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Título principal
 st.markdown('<h2 class="main-header"> 🪐 Análisis de Exoplanetas Habitables</h2>', unsafe_allow_html=True)
 
 # Sidebar
@@ -54,6 +51,7 @@ with st.sidebar:
         ["📊 Dataset de Exoplanetas",
          "🏠 Índice de Habitabilidad",
          "🎯 Vector de Referencia",
+         "🪐 Planeta Ficticio",
          "🔍 Exploración de Datos",
          "🌡️ Análisis de Temperatura",
          "⭐ Características Estelares"]
@@ -74,17 +72,14 @@ def cargar_datos():
 @st.cache_data
 def procesar_datos(df_nasa):
     num_cols = [
-        # Familia B - Órbita
         "pl_orbper",
         "pl_orbsmax",
         "pl_orbeccen",
-        # Familia C - Planeta
         "pl_rade",
         "pl_bmasse",
         "pl_dens",
         "pl_eqt",
         "pl_insol",
-        # Familia D - Estrella
         "st_teff",
         "st_lum",
         "st_mass",
@@ -232,6 +227,24 @@ def Calcular_indices_habitabilidad(df_final, reference_vector):
 
     return df_rankingExoplanetas
 
+def calcular_indice_individual(valor_planeta, reference_vector, df_final):
+    vector_ref = pd.Series(reference_vector)[num_cols]
+    vector_planeta = pd.Series(valor_planeta)[num_cols]
+    
+    p01 = df_final[num_cols].quantile(0.01)
+    p99 = df_final[num_cols].quantile(0.99)
+    rango_tipico = p99 - p01
+    
+    diferencias = []
+    for col in num_cols:
+        dif_norm = (vector_planeta[col] - vector_ref[col]) / rango_tipico[col]
+        diferencias.append(dif_norm ** 2)
+    
+    distancia = np.sqrt(sum(diferencias))
+    indice = 1 / (1 + distancia)
+    
+    return distancia, indice
+
 # Cargar datos
 df_nasa = cargar_datos()
 df_reduced, num_cols = procesar_datos(df_nasa)
@@ -289,7 +302,6 @@ nombres_columnas = {
 
 nombres_tecnicos = {v: k for k, v in nombres_columnas.items()}
 
-# Diccionarios extendidos para el ranking de habitabilidad
 nombres_columnas_ranking = {
     **nombres_columnas,
     'ranking': 'Orden',
@@ -299,19 +311,16 @@ nombres_columnas_ranking = {
 
 nombres_tecnicos_ranking = {v: k for k, v in nombres_columnas_ranking.items()}
 
-# ==================== PÁGINAS ====================
+# ==================== PÁGINAS ==================== #
 
 if pagina == "📊 Dataset de Exoplanetas":
-    # Inicializar session state para filtros dinámicos
     if 'filtros' not in st.session_state:
         st.session_state.filtros = []
     
-    # ========== APLICAR FILTROS DINÁMICOS ==========
     df_filtrado = df_final.copy()
     
-    # Actualizar valores de filtros desde session_state antes de aplicarlos
     for idx, filtro in enumerate(st.session_state.filtros):
-        # Actualizar desde las keys de los widgets si existen
+
         if f"campo_{idx}" in st.session_state:
             campo_seleccionado = st.session_state[f"campo_{idx}"]
             filtro['campo'] = nombres_tecnicos.get(campo_seleccionado, campo_seleccionado)
@@ -329,7 +338,6 @@ if pagina == "📊 Dataset de Exoplanetas":
         if f"valor_{idx}" in st.session_state:
             filtro['valor'] = st.session_state[f"valor_{idx}"]
     
-    # Aplicar filtros dinámicos
     for filtro in st.session_state.filtros:
         campo = filtro['campo']
         operador = filtro['operador']
@@ -337,8 +345,7 @@ if pagina == "📊 Dataset de Exoplanetas":
         
         if campo in df_filtrado.columns:
             if operador == 'contiene':
-                # Filtro de texto
-                if valor:  # Solo aplicar si hay texto
+                if valor:
                     df_filtrado = df_filtrado[
                         df_filtrado[campo].str.contains(str(valor), case=False, na=False)
                     ]
@@ -353,21 +360,16 @@ if pagina == "📊 Dataset de Exoplanetas":
             elif operador == '<=':
                 df_filtrado = df_filtrado[df_filtrado[campo] <= valor]
     
-    # ========== MOSTRAR DATASET ==========
     if len(df_filtrado) > 0:
-        # ========== TABS CON DIFERENTES VISTAS ==========
         tab1, tab2 = st.tabs(["📋 Datos", "📊 Estadísticas"])
         
         with tab1:
-            # ========== SISTEMA DE FILTROS DINÁMICOS ==========
-            # Título y botones de control en la misma fila
             col_titulo, col_agregar, col_limpiar = st.columns([4, 1.5, 1.5])
             with col_titulo:
                 st.subheader("🔍 Filtros Avanzados")
             
             with col_agregar:
                 if st.button("➕ Agregar Filtro", use_container_width=True):
-                    # Crear filtro de texto por defecto (Nombre del Planeta)
                     st.session_state.filtros.append({
                         'campo': 'pl_name',
                         'operador': 'contiene',
@@ -380,14 +382,12 @@ if pagina == "📊 Dataset de Exoplanetas":
                     st.session_state.filtros = []
                     st.rerun()
             
-            # Mostrar filtros existentes
             if len(st.session_state.filtros) > 0:
                 st.markdown("**Filtros activos:**")
                 
                 filtros_a_eliminar = []
                 
                 for idx, filtro in enumerate(st.session_state.filtros):
-                    # Determinar tipo de filtro para el resumen
                     campo_actual = filtro['campo']
                     es_texto = campo_actual in ['pl_name', 'hostname']
                     if es_texto:
@@ -399,7 +399,6 @@ if pagina == "📊 Dataset de Exoplanetas":
                         col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
                         
                         with col1:
-                            # Selector de campo (variables numéricas + columnas de texto)
                             campos_texto = ['pl_name', 'hostname']
                             campos_disponibles = campos_texto + num_cols
                             campos_disponibles_natural = [nombres_columnas.get(col, col) for col in campos_disponibles]
@@ -413,13 +412,11 @@ if pagina == "📊 Dataset de Exoplanetas":
                             )
                             nuevo_campo = nombres_tecnicos.get(campo_seleccionado, campo_seleccionado)
                             
-                            # Si cambió el tipo de campo, resetear valor y operador
                             campo_anterior = filtro.get('campo')
                             es_texto_anterior = campo_anterior in ['pl_name', 'hostname']
                             es_texto_nuevo = nuevo_campo in ['pl_name', 'hostname']
                             
                             if campo_anterior != nuevo_campo and es_texto_anterior != es_texto_nuevo:
-                                # Cambió el tipo de campo
                                 if es_texto_nuevo:
                                     filtro['valor'] = ''
                                     filtro['operador'] = 'contiene'
@@ -429,13 +426,11 @@ if pagina == "📊 Dataset de Exoplanetas":
                             
                             filtro['campo'] = nuevo_campo
                         
-                        # Detectar si el campo es de texto o numérico
                         campo_tecnico = filtro['campo']
                         es_campo_texto = campo_tecnico in ['pl_name', 'hostname']
                         
                         with col2:
                             if es_campo_texto:
-                                # Para texto: mostrar operador fijo "contiene"
                                 st.text_input(
                                     "Operador:",
                                     value="contiene",
@@ -444,7 +439,6 @@ if pagina == "📊 Dataset de Exoplanetas":
                                 )
                                 filtro['operador'] = 'contiene'
                             else:
-                                # Para números: selector de operador
                                 operadores = {
                                     'Igual a (=)': '==',
                                     'Mayor que (>)': '>',
@@ -453,7 +447,6 @@ if pagina == "📊 Dataset de Exoplanetas":
                                     'Menor o igual (≤)': '<='
                                 }
                                 
-                                # Manejar caso donde el operador puede ser 'contiene' de un filtro anterior
                                 operador_filtro = filtro.get('operador', '>=')
                                 if operador_filtro == 'contiene':
                                     operador_filtro = '>='
@@ -470,10 +463,8 @@ if pagina == "📊 Dataset de Exoplanetas":
                                 filtro['operador'] = operadores[operador_seleccionado]
                         
                         with col3:
-                            # Input de valor según el tipo de campo
                             if campo_tecnico in df_final.columns:
                                 if es_campo_texto:
-                                    # Input de texto
                                     valor = st.text_input(
                                         "Valor:",
                                         value=str(filtro.get('valor', '')),
@@ -482,11 +473,8 @@ if pagina == "📊 Dataset de Exoplanetas":
                                     )
                                     filtro['valor'] = valor
                                 else:
-                                    # Input numérico
                                     max_val = float(df_final[campo_tecnico].max())
                                     
-                                    # Permitir valores desde 0 y usar 0 como valor por defecto
-                                    # Manejar conversión segura de valor (puede ser string vacío si cambió de texto a número)
                                     try:
                                         valor_actual = float(filtro.get('valor', 0.0))
                                     except (ValueError, TypeError):
@@ -504,11 +492,9 @@ if pagina == "📊 Dataset de Exoplanetas":
                                     filtro['valor'] = valor
                         
                         with col4:
-                            # Botón eliminar
                             if st.button("❌", key=f"eliminar_{idx}", help="Eliminar este filtro"):
                                 filtros_a_eliminar.append(idx)
                 
-                # Eliminar filtros marcados
                 if filtros_a_eliminar:
                     for idx in sorted(filtros_a_eliminar, reverse=True):
                         st.session_state.filtros.pop(idx)
@@ -518,11 +504,9 @@ if pagina == "📊 Dataset de Exoplanetas":
             
             st.markdown("---")
             
-            # Mostrar el dataframe interactivo con nombres en lenguaje natural
             df_mostrar = df_filtrado.copy()
             df_mostrar = df_mostrar.rename(columns=nombres_columnas)
             
-            # Configuración para fijar solo la columna del nombre del planeta
             column_config = {
                 nombres_columnas['pl_name']: st.column_config.TextColumn(
                     nombres_columnas['pl_name'],
@@ -539,16 +523,13 @@ if pagina == "📊 Dataset de Exoplanetas":
                 hide_index=True
             )
 
-            # Header con info básica
             st.caption(f"📊 Mostrando **{len(df_filtrado)}** de {len(df_final)} exoplanetas | "
                       f"⭐ {df_filtrado['hostname'].nunique()} estrellas únicas")
         
         with tab2:
-            # Usar todas las columnas numéricas disponibles
             vars_stats = num_cols
             
             if vars_stats:
-                # Renombrar columnas a nombres naturales para las estadísticas
                 df_stats = df_filtrado[vars_stats].describe().T
                 df_stats.index = df_stats.index.map(lambda x: nombres_columnas.get(x, x))
                 
@@ -558,20 +539,18 @@ if pagina == "📊 Dataset de Exoplanetas":
                     hide_index=False
                 )
                 
-                # Gráficos compactos de distribución
                 st.markdown("---")
-                num_vars = min(len(vars_stats), 12)  # Máximo 12 gráficos
+                num_vars = min(len(vars_stats), 12) 
                 
                 if num_vars > 0:
-                    # Paleta de colores Okabe-Ito (amigable para daltonismo)
                     okabe_ito_colors = [
-                        '#E69F00',  # Naranja
-                        '#56B4E9',  # Azul cielo
-                        '#009E73',  # Verde
-                        '#F0E442',  # Amarillo
-                        '#0072B2',  # Azul
-                        '#D55E00',  # Naranja rojizo
-                        '#CC79A7',  # Rosa
+                        '#E69F00',
+                        '#56B4E9',
+                        '#009E73',
+                        '#F0E442',
+                        '#0072B2',
+                        '#D55E00',
+                        '#CC79A7',
                     ]
                     
                     cols_per_row = 3
@@ -582,10 +561,8 @@ if pagina == "📊 Dataset de Exoplanetas":
                     
                     for idx, var in enumerate(vars_stats[:12]):
                         ax = axes[idx]
-                        # Usar color de la paleta Okabe-Ito (cíclico si hay más de 7 variables)
                         color = okabe_ito_colors[idx % len(okabe_ito_colors)]
                         df_filtrado[var].hist(bins=30, ax=ax, color=color, edgecolor='black', alpha=0.7)
-                        # Usar nombre en lenguaje natural para el título
                         ax.set_title(nombres_columnas.get(var, var), fontweight='bold', fontsize=10)
                         ax.set_xlabel('')
                         ax.set_ylabel('Frecuencia', fontsize=9)
@@ -792,7 +769,6 @@ elif pagina == "🏠 Índice de Habitabilidad":
             
             st.markdown("---")
             
-            # Mostrar solo columnas principales del ranking
             columnas_principales = ['ranking', 'pl_name', 'hostname', 'indice_habitabilidad', 'distancia_tierra']
             
             df_mostrar = df_filtrado[columnas_principales].copy()
@@ -870,15 +846,14 @@ elif pagina == "🏠 Índice de Habitabilidad":
         with tab4:
             st.subheader("🔗 Relaciones Bivariantes")
             
-            # Paleta de colores Okabe-Ito
             okabe_ito_colors = [
-                '#E69F00',  # Naranja
-                '#56B4E9',  # Azul cielo
-                '#009E73',  # Verde
-                '#F0E442',  # Amarillo
-                '#0072B2',  # Azul
-                '#D55E00',  # Naranja rojizo
-                '#CC79A7',  # Rosa
+                '#E69F00',
+                '#56B4E9',
+                '#009E73',
+                '#F0E442',
+                '#0072B2',
+                '#D55E00',
+                '#CC79A7',
             ]
             
             fig3, axes3 = plt.subplots(2, 2, figsize=(14, 10))
@@ -943,9 +918,6 @@ elif pagina == "🎯 Vector de Referencia":
             st.success("✅ Índice recalculado exitosamente")
             st.rerun()
     
-    st.markdown("---")
-    
-    # Organizar los valores en categorías
     st.subheader("🪐 Parámetros Orbitales")
     col1, col2, col3 = st.columns(3)
     
@@ -977,7 +949,6 @@ elif pagina == "🎯 Vector de Referencia":
             help="Medida de cuánto se desvía la órbita de ser circular (0=circular, 1=muy elíptica)"
         )
     
-    st.markdown("---")
     st.subheader("🌍 Parámetros Planetarios")
     
     col1, col2, col3 = st.columns(3)
@@ -1029,7 +1000,6 @@ elif pagina == "🎯 Vector de Referencia":
             help="Flujo de radiación recibida (relativo a la Tierra)"
         )
     
-    st.markdown("---")
     st.subheader("⭐ Parámetros Estelares")
     
     col1, col2, col3 = st.columns(3)
@@ -1287,7 +1257,212 @@ elif pagina == "⭐ Características Estelares":
         ax.legend()
         st.pyplot(fig)
 
-# Footer
+elif pagina == "🪐 Planeta Ficticio":
+    st.subheader("🪐 Calcular Índice de Habitabilidad de tu propio planeta")
+    
+    st.markdown("---")
+    st.subheader("🪐 Parámetros Orbitales")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        pl_orbper = st.number_input(
+            "Periodo Orbital (días)",
+            value=365.25,
+            min_value=0.1,
+            format="%.2f"
+        )
+    
+    with col2:
+        pl_orbsmax = st.number_input(
+            "Distancia Orbital (AU)",
+            value=1.0,
+            min_value=0.01,
+            format="%.4f"
+        )
+    
+    with col3:
+        pl_orbeccen = st.number_input(
+            "Excentricidad Orbital",
+            value=0.0167,
+            min_value=0.0,
+            max_value=0.99,
+            format="%.4f"
+        )
+    
+    st.subheader("🌍 Parámetros del Planeta")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        pl_rade = st.number_input(
+            "Radio del Planeta (R⊕)",
+            value=1.0,
+            min_value=0.1,
+            format="%.3f"
+        )
+    
+    with col2:
+        pl_bmasse = st.number_input(
+            "Masa del Planeta (M⊕)",
+            value=1.0,
+            min_value=0.01,
+            format="%.3f"
+        )
+    
+    with col3:
+        pl_dens = st.number_input(
+            "Densidad (g/cm³)",
+            value=5.51,
+            min_value=0.1,
+            format="%.2f"
+        )
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        pl_eqt = st.number_input(
+            "Temperatura de Equilibrio (K)",
+            value=255.0,
+            min_value=0.0,
+            format="%.1f"
+        )
+    
+    with col2:
+        pl_insol = st.number_input(
+            "Radiación Recibida",
+            value=1.0,
+            min_value=0.01,
+            format="%.3f"
+        )
+    
+    st.subheader("⭐ Parámetros de la Estrella")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st_teff = st.number_input(
+            "Temperatura Estelar (K)",
+            value=5778.0,
+            min_value=1000.0,
+            format="%.1f"
+        )
+    
+    with col2:
+        st_mass = st.number_input(
+            "Masa Estelar (M☉)",
+            value=1.0,
+            min_value=0.1,
+            format="%.3f"
+        )
+    
+    with col3:
+        st_rad = st.number_input(
+            "Radio Estelar (R☉)",
+            value=1.0,
+            min_value=0.1,
+            format="%.3f"
+        )
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st_lum = st.number_input(
+            "Luminosidad Estelar (log)",
+            value=0.0,
+            format="%.3f"
+        )
+    
+    with col2:
+        st_met = st.number_input(
+            "Metalicidad [Fe/H]",
+            value=0.0,
+            format="%.3f"
+        )
+    
+    with col3:
+        st_logg = st.number_input(
+            "Gravedad Superficial (log g)",
+            value=4.44,
+            min_value=0.0,
+            format="%.2f"
+        )
+    
+    with col4:
+        st_age = st.number_input(
+            "Edad Estelar (Gyr)",
+            value=4.6,
+            min_value=0.0,
+            format="%.2f"
+        )
+    
+    st.markdown("---")
+    
+    if st.button("🔬 Calcular Índice de Habitabilidad", type="primary", use_container_width=True):
+        valor_planeta = {
+            "pl_orbper": pl_orbper,
+            "pl_orbsmax": pl_orbsmax,
+            "pl_orbeccen": pl_orbeccen,
+            "pl_rade": pl_rade,
+            "pl_bmasse": pl_bmasse,
+            "pl_dens": pl_dens,
+            "pl_eqt": pl_eqt,
+            "pl_insol": pl_insol,
+            "st_teff": st_teff,
+            "st_lum": st_lum,
+            "st_mass": st_mass,
+            "st_rad": st_rad,
+            "st_met": st_met,
+            "st_logg": st_logg,
+            "st_age": st_age
+        }
+        
+        distancia, indice = calcular_indice_individual(
+            valor_planeta,
+            st.session_state.earth_values,
+            df_final
+        )
+        
+        mejores = (df_rankingExoplanetas['indice_habitabilidad'] > indice).sum()
+        posicion = mejores + 1
+        
+        st.subheader("📊 Resultados")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                "Índice de Habitabilidad",
+                f"{indice:.6f}"
+            )
+        
+        with col2:
+            st.metric(
+                "Distancia respecto del vector de referencia",
+                f"{distancia:.4f}"
+            )
+        
+        with col3:
+            st.metric(
+                "Posición en el ranking",
+                f"#{posicion} / {len(df_rankingExoplanetas)}"
+            )
+        
+        st.markdown("---")
+        st.subheader("📈 Comparación con Exoplanetas Conocidos")
+        
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.hist(df_rankingExoplanetas['indice_habitabilidad'], bins=50, 
+               color='steelblue', edgecolor='black', alpha=0.7, label='Exoplanetas conocidos')
+        ax.axvline(indice, color='red', linestyle='--', linewidth=3,
+                  label=f'Tu planeta: {indice:.6f}')
+        ax.set_xlabel('Índice de Habitabilidad', fontsize=12)
+        ax.set_ylabel('Frecuencia', fontsize=12)
+        ax.set_title('Distribución de Índices de Habitabilidad', fontsize=14, fontweight='bold')
+        ax.legend(fontsize=11)
+        ax.grid(alpha=0.3)
+        st.pyplot(fig)
+
+
 st.markdown("---")
 st.markdown("""
     <div style='text-align: center'>

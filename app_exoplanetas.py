@@ -6,6 +6,22 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 
+FAMILY_COLS = {
+    "orbita": ["pl_orbper", "pl_orbsmax", "pl_orbeccen"],
+    "planeta": ["pl_rade", "pl_bmasse", "pl_dens", "pl_eqt", "pl_insol"],
+    "estrella": ["st_teff", "st_lum", "st_mass", "st_rad", "st_met", "st_logg", "st_age"]
+}
+
+DEFAULT_SENSITIVITY = {
+    "winsor_threshold": 1.5,
+    "p_low": 1,
+    "p_high": 99,
+    "weight_orbita": 1.0,
+    "weight_planeta": 1.0,
+    "weight_estrella": 1.0,
+    "stability_top_n": 20
+}
+
 st.set_page_config(
     page_title="Exoplanetas Habitables",
     page_icon="🪐",
@@ -268,30 +284,49 @@ def winsorizar_tukey(x, threshold=1.5):
     return x.clip(lower=floor, upper=ceiling)
 
 @st.cache_data
-def gestionar_outliers(df_work):
+def gestionar_outliers(df_work, cols, threshold=1.5):
 
     df_wins = df_work.copy()
 
-    for col in num_cols:
-        df_wins[col] = winsorizar_tukey(df_wins[col])
+    for col in cols:
+        df_wins[col] = winsorizar_tukey(df_wins[col], threshold=threshold)
 
     return df_wins
 
 @st.cache_data
-def Calcular_indices_habitabilidad(df_final, reference_vector):
+def calcular_indices_habitabilidad(df_final, num_cols, reference_vector, p_low=1, p_high=99, family_weights=None):
+    if family_weights is None:
+        family_weights = {"orbita": 1.0, "planeta": 1.0, "estrella": 1.0}
+
     vector_referencia = pd.Series(reference_vector)[num_cols]
-    p01 = df_final[num_cols].quantile(0.01)
-    p99 = df_final[num_cols].quantile(0.99)
-    rango_tipico = p99 - p01
+    p_low_q = df_final[num_cols].quantile(p_low / 100)
+    p_high_q = df_final[num_cols].quantile(p_high / 100)
+    rango_tipico = (p_high_q - p_low_q).clip(lower=1e-9)
     
     df_rankingExoplanetas = df_final.copy()
     
+    norm_cols = []
     for col in num_cols:
         x_ref = vector_referencia[col]
         rango = rango_tipico[col]
-        df_rankingExoplanetas[col] = (df_rankingExoplanetas[col] - x_ref) / rango
+        raw_col = f"{col}_raw"
+        norm_col = f"{col}_norm"
+        df_rankingExoplanetas[raw_col] = df_rankingExoplanetas[col]
+        df_rankingExoplanetas[norm_col] = (df_rankingExoplanetas[col] - x_ref) / rango
+        norm_cols.append(norm_col)
     
-    df_rankingExoplanetas['distancia_tierra'] = np.sqrt((df_rankingExoplanetas[num_cols].abs() ** 2).sum(axis=1))
+    weighted_terms = []
+    for col in num_cols:
+        norm_col = f"{col}_norm"
+        if col in FAMILY_COLS["orbita"]:
+            weight = family_weights.get("orbita", 1.0)
+        elif col in FAMILY_COLS["planeta"]:
+            weight = family_weights.get("planeta", 1.0)
+        else:
+            weight = family_weights.get("estrella", 1.0)
+        weighted_terms.append(weight * (df_rankingExoplanetas[norm_col] ** 2))
+
+    df_rankingExoplanetas['distancia_tierra'] = np.sqrt(np.sum(weighted_terms, axis=0))
     df_rankingExoplanetas['indice_habitabilidad'] = 1 / (1 + df_rankingExoplanetas['distancia_tierra'])
     df_rankingExoplanetas["orig_idx"] = df_rankingExoplanetas.index
     df_rankingExoplanetas = df_rankingExoplanetas.sort_values('indice_habitabilidad', ascending=False).reset_index(drop=True)
@@ -299,29 +334,236 @@ def Calcular_indices_habitabilidad(df_final, reference_vector):
 
     return df_rankingExoplanetas
 
-def calcular_indice_individual(valor_planeta, reference_vector, df_final):
+def calcular_indice_individual(valor_planeta, reference_vector, df_final, num_cols, p_low=1, p_high=99, family_weights=None):
+    if family_weights is None:
+        family_weights = {"orbita": 1.0, "planeta": 1.0, "estrella": 1.0}
+
     vector_ref = pd.Series(reference_vector)[num_cols]
     vector_planeta = pd.Series(valor_planeta)[num_cols]
     
-    p01 = df_final[num_cols].quantile(0.01)
-    p99 = df_final[num_cols].quantile(0.99)
-    rango_tipico = p99 - p01
+    p_low_q = df_final[num_cols].quantile(p_low / 100)
+    p_high_q = df_final[num_cols].quantile(p_high / 100)
+    rango_tipico = (p_high_q - p_low_q).clip(lower=1e-9)
     
     diferencias = []
     for col in num_cols:
         dif_norm = (vector_planeta[col] - vector_ref[col]) / rango_tipico[col]
-        diferencias.append(dif_norm ** 2)
+        if col in FAMILY_COLS["orbita"]:
+            weight = family_weights.get("orbita", 1.0)
+        elif col in FAMILY_COLS["planeta"]:
+            weight = family_weights.get("planeta", 1.0)
+        else:
+            weight = family_weights.get("estrella", 1.0)
+        diferencias.append(weight * (dif_norm ** 2))
     
     distancia = np.sqrt(sum(diferencias))
     indice = 1 / (1 + distancia)
     
     return distancia, indice
 
+
+def apply_dynamic_filters(df_source, filters):
+    df_filtrado = df_source.copy()
+    for filtro in filters:
+        campo = filtro['campo']
+        operador = filtro['operador']
+        valor = filtro['valor']
+
+        if campo not in df_filtrado.columns:
+            continue
+        if operador == 'contiene':
+            if valor:
+                df_filtrado = df_filtrado[
+                    df_filtrado[campo].astype(str).str.contains(str(valor), case=False, na=False)
+                ]
+        elif operador == '==':
+            df_filtrado = df_filtrado[df_filtrado[campo] == valor]
+        elif operador == '>':
+            df_filtrado = df_filtrado[df_filtrado[campo] > valor]
+        elif operador == '>=':
+            df_filtrado = df_filtrado[df_filtrado[campo] >= valor]
+        elif operador == '<':
+            df_filtrado = df_filtrado[df_filtrado[campo] < valor]
+        elif operador == '<=':
+            df_filtrado = df_filtrado[df_filtrado[campo] <= valor]
+
+    return df_filtrado
+
+
+def render_dynamic_filters(
+    df_source,
+    filters_key,
+    key_prefix,
+    nombres_columnas_map,
+    nombres_tecnicos_map,
+    text_fields,
+    numeric_fields
+):
+    if filters_key not in st.session_state:
+        st.session_state[filters_key] = []
+
+    filters = st.session_state[filters_key]
+
+    for idx, filtro in enumerate(filters):
+        campo_key = f"campo_{key_prefix}_{idx}"
+        operador_key = f"operador_{key_prefix}_{idx}"
+        valor_key = f"valor_{key_prefix}_{idx}"
+
+        if campo_key in st.session_state:
+            campo_seleccionado = st.session_state[campo_key]
+            filtro['campo'] = nombres_tecnicos_map.get(campo_seleccionado, campo_seleccionado)
+
+        if operador_key in st.session_state and filtro['campo'] not in text_fields:
+            operadores = {
+                'Igual a (=)': '==',
+                'Mayor que (>)': '>',
+                'Mayor o igual (≥)': '>=',
+                'Menor que (<)': '<',
+                'Menor o igual (≤)': '<='
+            }
+            filtro['operador'] = operadores.get(st.session_state[operador_key], filtro['operador'])
+
+        if valor_key in st.session_state:
+            filtro['valor'] = st.session_state[valor_key]
+
+    col_titulo, col_agregar, col_limpiar = st.columns([4, 1.5, 1.5])
+    with col_titulo:
+        st.subheader("🔍 Filtros Avanzados")
+    with col_agregar:
+        if st.button("➕ Agregar Filtro", key=f"add_{key_prefix}", use_container_width=True):
+            filters.append({'campo': text_fields[0], 'operador': 'contiene', 'valor': ''})
+            st.rerun()
+    with col_limpiar:
+        if st.button("🗑️ Limpiar Todo", key=f"clear_{key_prefix}", use_container_width=True):
+            st.session_state[filters_key] = []
+            st.rerun()
+
+    if len(filters) == 0:
+        st.info("💡 Haz clic en '➕ Agregar Filtro' para crear filtros personalizados")
+        return
+
+    st.markdown("**Filtros activos:**")
+    filtros_a_eliminar = []
+
+    for idx, filtro in enumerate(filters):
+        campo_actual = filtro['campo']
+        es_texto = campo_actual in text_fields
+        if es_texto:
+            resumen = f"🔹 Filtro {idx + 1}: {nombres_columnas_map.get(campo_actual, campo_actual)} contiene '{filtro['valor']}'"
+        else:
+            resumen = f"🔹 Filtro {idx + 1}: {nombres_columnas_map.get(campo_actual, campo_actual)} {filtro['operador']} {filtro['valor']}"
+
+        with st.expander(resumen, expanded=True):
+            col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+
+            with col1:
+                campos_disponibles = text_fields + numeric_fields
+                campos_disponibles_natural = [nombres_columnas_map.get(col, col) for col in campos_disponibles]
+                campo_actual_natural = nombres_columnas_map.get(campo_actual, campo_actual)
+                campo_seleccionado = st.selectbox(
+                    "Campo:",
+                    options=campos_disponibles_natural,
+                    index=campos_disponibles_natural.index(campo_actual_natural) if campo_actual_natural in campos_disponibles_natural else 0,
+                    key=f"campo_{key_prefix}_{idx}"
+                )
+                nuevo_campo = nombres_tecnicos_map.get(campo_seleccionado, campo_seleccionado)
+                if campo_actual != nuevo_campo:
+                    if nuevo_campo in text_fields:
+                        filtro['valor'] = ''
+                        filtro['operador'] = 'contiene'
+                    else:
+                        serie = pd.to_numeric(df_source[nuevo_campo], errors='coerce')
+                        filtro['valor'] = float(serie.median()) if serie.notna().any() else 0.0
+                        filtro['operador'] = '>='
+                filtro['campo'] = nuevo_campo
+
+            campo_tecnico = filtro['campo']
+            es_campo_texto = campo_tecnico in text_fields
+
+            with col2:
+                if es_campo_texto:
+                    st.text_input("Operador:", value="contiene", disabled=True, key=f"operador_{key_prefix}_{idx}")
+                    filtro['operador'] = 'contiene'
+                else:
+                    operadores = {
+                        'Igual a (=)': '==',
+                        'Mayor que (>)': '>',
+                        'Mayor o igual (≥)': '>=',
+                        'Menor que (<)': '<',
+                        'Menor o igual (≤)': '<='
+                    }
+                    operador_actual = [k for k, v in operadores.items() if v == filtro.get('operador', '>=')]
+                    operador_actual = operador_actual[0] if operador_actual else 'Mayor o igual (≥)'
+                    operador_seleccionado = st.selectbox(
+                        "Operador:",
+                        options=list(operadores.keys()),
+                        index=list(operadores.keys()).index(operador_actual),
+                        key=f"operador_{key_prefix}_{idx}"
+                    )
+                    filtro['operador'] = operadores[operador_seleccionado]
+
+            with col3:
+                if es_campo_texto:
+                    valor = st.text_input(
+                        "Valor:",
+                        value=str(filtro.get('valor', '')),
+                        placeholder="Escribe para buscar...",
+                        key=f"valor_{key_prefix}_{idx}"
+                    )
+                    filtro['valor'] = valor
+                else:
+                    serie = pd.to_numeric(df_source[campo_tecnico], errors='coerce')
+                    min_val = float(serie.min()) if serie.notna().any() else 0.0
+                    max_val = float(serie.max()) if serie.notna().any() else 1.0
+                    if min_val == max_val:
+                        min_val -= 1.0
+                        max_val += 1.0
+                    try:
+                        valor_actual = float(filtro.get('valor', min_val))
+                    except (TypeError, ValueError):
+                        valor_actual = min_val
+                    valor_actual = min(max(valor_actual, min_val), max_val)
+                    step = (max_val - min_val) / 1000 if max_val > min_val else 0.01
+                    valor = st.number_input(
+                        "Valor:",
+                        min_value=min_val,
+                        max_value=max_val,
+                        value=valor_actual,
+                        step=float(step),
+                        key=f"valor_{key_prefix}_{idx}",
+                        format="%.4f"
+                    )
+                    filtro['valor'] = valor
+
+            with col4:
+                if st.button("❌", key=f"eliminar_{key_prefix}_{idx}", help="Eliminar este filtro"):
+                    filtros_a_eliminar.append(idx)
+
+    if filtros_a_eliminar:
+        for idx in sorted(filtros_a_eliminar, reverse=True):
+            filters.pop(idx)
+        st.rerun()
+
+
+def compute_topn_stability(df_current, df_baseline, top_n):
+    top_n = min(top_n, len(df_current), len(df_baseline))
+    if top_n <= 0:
+        return 0.0, np.nan
+
+    top_curr = set(df_current.head(top_n)["objectid"].astype(str))
+    top_base = set(df_baseline.head(top_n)["objectid"].astype(str))
+    overlap = len(top_curr.intersection(top_base)) / top_n * 100
+
+    ranks_curr = df_current[["objectid", "ranking"]].rename(columns={"ranking": "ranking_curr"})
+    ranks_base = df_baseline[["objectid", "ranking"]].rename(columns={"ranking": "ranking_base"})
+    merged = ranks_curr.merge(ranks_base, on="objectid", how="inner")
+    spearman = merged["ranking_curr"].corr(merged["ranking_base"], method="spearman")
+    return overlap, spearman
+
 # Cargar datos
 df_nasa = cargar_datos()
 df_reduced, num_cols = procesar_datos(df_nasa)
 df_work = imputar_datos(df_reduced, num_cols)
-df_final = gestionar_outliers(df_work)
 
 # Valores de referencia por defecto (Tierra)
 default_earth_values = {
@@ -346,10 +588,50 @@ default_earth_values = {
 if 'earth_values' not in st.session_state:
     st.session_state.earth_values = default_earth_values.copy()
 
-if 'df_rankingExoplanetas' not in st.session_state:
-    st.session_state.df_rankingExoplanetas = Calcular_indices_habitabilidad(df_final, st.session_state.earth_values)
+if 'sensitivity_params' not in st.session_state:
+    st.session_state.sensitivity_params = DEFAULT_SENSITIVITY.copy()
 
-df_rankingExoplanetas = st.session_state.df_rankingExoplanetas
+sensitivity = st.session_state.sensitivity_params
+
+family_weights = {
+    "orbita": float(sensitivity["weight_orbita"]),
+    "planeta": float(sensitivity["weight_planeta"]),
+    "estrella": float(sensitivity["weight_estrella"])
+}
+
+df_final = gestionar_outliers(
+    df_work,
+    num_cols,
+    threshold=float(sensitivity["winsor_threshold"])
+)
+
+df_final_baseline = gestionar_outliers(
+    df_work,
+    num_cols,
+    threshold=float(DEFAULT_SENSITIVITY["winsor_threshold"])
+)
+
+df_rankingExoplanetas = calcular_indices_habitabilidad(
+    df_final,
+    num_cols,
+    st.session_state.earth_values,
+    p_low=int(sensitivity["p_low"]),
+    p_high=int(sensitivity["p_high"]),
+    family_weights=family_weights
+)
+
+df_ranking_baseline = calcular_indices_habitabilidad(
+    df_final_baseline,
+    num_cols,
+    st.session_state.earth_values,
+    p_low=int(DEFAULT_SENSITIVITY["p_low"]),
+    p_high=int(DEFAULT_SENSITIVITY["p_high"]),
+    family_weights={
+        "orbita": DEFAULT_SENSITIVITY["weight_orbita"],
+        "planeta": DEFAULT_SENSITIVITY["weight_planeta"],
+        "estrella": DEFAULT_SENSITIVITY["weight_estrella"]
+    }
+)
 
 nombres_columnas = {
     'objectid': 'ID NASA',
@@ -388,191 +670,24 @@ nombres_tecnicos_ranking = {v: k for k, v in nombres_columnas_ranking.items()}
 if pagina == "📊 Dataset de Exoplanetas":
     if 'filtros' not in st.session_state:
         st.session_state.filtros = []
-    
-    df_filtrado = df_final.copy()
-    
-    for idx, filtro in enumerate(st.session_state.filtros):
 
-        if f"campo_{idx}" in st.session_state:
-            campo_seleccionado = st.session_state[f"campo_{idx}"]
-            filtro['campo'] = nombres_tecnicos.get(campo_seleccionado, campo_seleccionado)
-        
-        if f"operador_{idx}" in st.session_state and filtro['campo'] not in ['pl_name', 'hostname']:
-            operadores = {
-                'Igual a (=)': '==',
-                'Mayor que (>)': '>',
-                'Mayor o igual (≥)': '>=',
-                'Menor que (<)': '<',
-                'Menor o igual (≤)': '<='
-            }
-            filtro['operador'] = operadores.get(st.session_state[f"operador_{idx}"], filtro['operador'])
-        
-        if f"valor_{idx}" in st.session_state:
-            filtro['valor'] = st.session_state[f"valor_{idx}"]
-    
-    for filtro in st.session_state.filtros:
-        campo = filtro['campo']
-        operador = filtro['operador']
-        valor = filtro['valor']
-        
-        if campo in df_filtrado.columns:
-            if operador == 'contiene':
-                if valor:
-                    df_filtrado = df_filtrado[
-                        df_filtrado[campo].str.contains(str(valor), case=False, na=False)
-                    ]
-            elif operador == '==':
-                df_filtrado = df_filtrado[df_filtrado[campo] == valor]
-            elif operador == '>':
-                df_filtrado = df_filtrado[df_filtrado[campo] > valor]
-            elif operador == '>=':
-                df_filtrado = df_filtrado[df_filtrado[campo] >= valor]
-            elif operador == '<':
-                df_filtrado = df_filtrado[df_filtrado[campo] < valor]
-            elif operador == '<=':
-                df_filtrado = df_filtrado[df_filtrado[campo] <= valor]
+    df_filtrado = apply_dynamic_filters(df_final, st.session_state.filtros)
     
     if len(df_filtrado) > 0:
         tab1, tab2 = st.tabs(["📋 Datos", "📊 Estadísticas"])
         
         with tab1:
-            col_titulo, col_agregar, col_limpiar = st.columns([4, 1.5, 1.5])
-            with col_titulo:
-                st.subheader("🔍 Filtros Avanzados")
-            
-            with col_agregar:
-                if st.button("➕ Agregar Filtro", use_container_width=True):
-                    st.session_state.filtros.append({
-                        'campo': 'pl_name',
-                        'operador': 'contiene',
-                        'valor': ''
-                    })
-                    st.rerun()
-            
-            with col_limpiar:
-                if st.button("🗑️ Limpiar Todo", use_container_width=True):
-                    st.session_state.filtros = []
-                    st.rerun()
-            
-            if len(st.session_state.filtros) > 0:
-                st.markdown("**Filtros activos:**")
-                
-                filtros_a_eliminar = []
-                
-                for idx, filtro in enumerate(st.session_state.filtros):
-                    campo_actual = filtro['campo']
-                    es_texto = campo_actual in ['pl_name', 'hostname']
-                    if es_texto:
-                        resumen = f"🔹 Filtro {idx + 1}: {nombres_columnas.get(campo_actual, campo_actual)} contiene '{filtro['valor']}'"
-                    else:
-                        resumen = f"🔹 Filtro {idx + 1}: {nombres_columnas.get(campo_actual, campo_actual)} {filtro['operador']} {filtro['valor']}"
-                    
-                    with st.expander(resumen, expanded=True):
-                        col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
-                        
-                        with col1:
-                            campos_texto = ['pl_name', 'hostname']
-                            campos_disponibles = campos_texto + num_cols
-                            campos_disponibles_natural = [nombres_columnas.get(col, col) for col in campos_disponibles]
-                            campo_actual_natural = nombres_columnas.get(filtro['campo'], filtro['campo'])
-                            
-                            campo_seleccionado = st.selectbox(
-                                "Campo:",
-                                options=campos_disponibles_natural,
-                                index=campos_disponibles_natural.index(campo_actual_natural) if campo_actual_natural in campos_disponibles_natural else 0,
-                                key=f"campo_{idx}"
-                            )
-                            nuevo_campo = nombres_tecnicos.get(campo_seleccionado, campo_seleccionado)
-                            
-                            campo_anterior = filtro.get('campo')
-                            es_texto_anterior = campo_anterior in ['pl_name', 'hostname']
-                            es_texto_nuevo = nuevo_campo in ['pl_name', 'hostname']
-                            
-                            if campo_anterior != nuevo_campo and es_texto_anterior != es_texto_nuevo:
-                                if es_texto_nuevo:
-                                    filtro['valor'] = ''
-                                    filtro['operador'] = 'contiene'
-                                else:
-                                    filtro['valor'] = 0.0
-                                    filtro['operador'] = '>='
-                            
-                            filtro['campo'] = nuevo_campo
-                        
-                        campo_tecnico = filtro['campo']
-                        es_campo_texto = campo_tecnico in ['pl_name', 'hostname']
-                        
-                        with col2:
-                            if es_campo_texto:
-                                st.text_input(
-                                    "Operador:",
-                                    value="contiene",
-                                    disabled=True,
-                                    key=f"operador_{idx}"
-                                )
-                                filtro['operador'] = 'contiene'
-                            else:
-                                operadores = {
-                                    'Igual a (=)': '==',
-                                    'Mayor que (>)': '>',
-                                    'Mayor o igual (≥)': '>=',
-                                    'Menor que (<)': '<',
-                                    'Menor o igual (≤)': '<='
-                                }
-                                
-                                operador_filtro = filtro.get('operador', '>=')
-                                if operador_filtro == 'contiene':
-                                    operador_filtro = '>='
-                                
-                                operador_actual = [k for k, v in operadores.items() if v == operador_filtro]
-                                operador_actual = operador_actual[0] if operador_actual else 'Mayor o igual (≥)'
-                                
-                                operador_seleccionado = st.selectbox(
-                                    "Operador:",
-                                    options=list(operadores.keys()),
-                                    index=list(operadores.keys()).index(operador_actual) if operador_actual in list(operadores.keys()) else 0,
-                                    key=f"operador_{idx}"
-                                )
-                                filtro['operador'] = operadores[operador_seleccionado]
-                        
-                        with col3:
-                            if campo_tecnico in df_final.columns:
-                                if es_campo_texto:
-                                    valor = st.text_input(
-                                        "Valor:",
-                                        value=str(filtro.get('valor', '')),
-                                        placeholder="Escribe para buscar...",
-                                        key=f"valor_{idx}"
-                                    )
-                                    filtro['valor'] = valor
-                                else:
-                                    max_val = float(df_final[campo_tecnico].max())
-                                    
-                                    try:
-                                        valor_actual = float(filtro.get('valor', 0.0))
-                                    except (ValueError, TypeError):
-                                        valor_actual = 0.0
-                                    valor_actual = max(0.0, min(max_val, valor_actual))
-                                    
-                                    valor = st.number_input(
-                                        "Valor:",
-                                        min_value=0.0,
-                                        max_value=max_val,
-                                        value=valor_actual,
-                                        key=f"valor_{idx}",
-                                        format="%.2f"
-                                    )
-                                    filtro['valor'] = valor
-                        
-                        with col4:
-                            if st.button("❌", key=f"eliminar_{idx}", help="Eliminar este filtro"):
-                                filtros_a_eliminar.append(idx)
-                
-                if filtros_a_eliminar:
-                    for idx in sorted(filtros_a_eliminar, reverse=True):
-                        st.session_state.filtros.pop(idx)
-                    st.rerun()
-            else:
-                st.info("💡 Haz clic en '➕ Agregar Filtro' para crear filtros personalizados")
+            render_dynamic_filters(
+                df_source=df_final,
+                filters_key="filtros",
+                key_prefix="dataset",
+                nombres_columnas_map=nombres_columnas,
+                nombres_tecnicos_map=nombres_tecnicos,
+                text_fields=['pl_name', 'hostname'],
+                numeric_fields=num_cols
+            )
+
+            df_filtrado = apply_dynamic_filters(df_final, st.session_state.filtros)
             
             st.markdown("---")
             
@@ -653,191 +768,95 @@ if pagina == "📊 Dataset de Exoplanetas":
 elif pagina == "🏠 Índice de Habitabilidad":
     if 'filtros_ranking' not in st.session_state:
         st.session_state.filtros_ranking = []
+
+    with st.expander("⚙️ Sensibilidad del índice", expanded=False):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.session_state.sensitivity_params["winsor_threshold"] = st.slider(
+                "Winsor (Tukey IQR)",
+                min_value=0.5,
+                max_value=3.0,
+                value=float(st.session_state.sensitivity_params["winsor_threshold"]),
+                step=0.1
+            )
+            st.session_state.sensitivity_params["weight_orbita"] = st.slider(
+                "Peso órbita",
+                min_value=0.0,
+                max_value=3.0,
+                value=float(st.session_state.sensitivity_params["weight_orbita"]),
+                step=0.1
+            )
+        with col2:
+            st.session_state.sensitivity_params["p_low"] = st.slider(
+                "Percentil inferior",
+                min_value=0,
+                max_value=20,
+                value=int(st.session_state.sensitivity_params["p_low"]),
+                step=1
+            )
+            st.session_state.sensitivity_params["weight_planeta"] = st.slider(
+                "Peso planeta",
+                min_value=0.0,
+                max_value=3.0,
+                value=float(st.session_state.sensitivity_params["weight_planeta"]),
+                step=0.1
+            )
+        with col3:
+            min_p_high = int(st.session_state.sensitivity_params["p_low"]) + 1
+            st.session_state.sensitivity_params["p_high"] = st.slider(
+                "Percentil superior",
+                min_value=min_p_high,
+                max_value=100,
+                value=max(int(st.session_state.sensitivity_params["p_high"]), min_p_high),
+                step=1
+            )
+            st.session_state.sensitivity_params["weight_estrella"] = st.slider(
+                "Peso estrella",
+                min_value=0.0,
+                max_value=3.0,
+                value=float(st.session_state.sensitivity_params["weight_estrella"]),
+                step=0.1
+            )
+
+        st.session_state.sensitivity_params["stability_top_n"] = st.slider(
+            "Top-N para estabilidad",
+            min_value=5,
+            max_value=200,
+            value=int(st.session_state.sensitivity_params["stability_top_n"]),
+            step=5
+        )
+
+        overlap_pct, spearman = compute_topn_stability(
+            df_rankingExoplanetas,
+            df_ranking_baseline,
+            int(st.session_state.sensitivity_params["stability_top_n"])
+        )
+        m1, m2 = st.columns(2)
+        with m1:
+            st.metric("Solapamiento Top-N vs base", f"{overlap_pct:.1f}%")
+        with m2:
+            spearman_txt = "N/A" if pd.isna(spearman) else f"{spearman:.3f}"
+            st.metric("Spearman ranking vs base", spearman_txt)
+
+        st.caption("El ranking se recalcula automáticamente con estos parámetros.")
     
-    df_filtrado = df_rankingExoplanetas.copy()
-    
-    for idx, filtro in enumerate(st.session_state.filtros_ranking):
-        if f"campo_rank_{idx}" in st.session_state:
-            campo_seleccionado = st.session_state[f"campo_rank_{idx}"]
-            filtro['campo'] = nombres_tecnicos_ranking.get(campo_seleccionado, campo_seleccionado)
-        
-        if f"operador_rank_{idx}" in st.session_state and filtro['campo'] not in ['pl_name', 'hostname']:
-            operadores = {
-                'Igual a (=)': '==',
-                'Mayor que (>)': '>',
-                'Mayor o igual (≥)': '>=',
-                'Menor que (<)': '<',
-                'Menor o igual (≤)': '<='
-            }
-            filtro['operador'] = operadores.get(st.session_state[f"operador_rank_{idx}"], filtro['operador'])
-        
-        if f"valor_rank_{idx}" in st.session_state:
-            filtro['valor'] = st.session_state[f"valor_rank_{idx}"]
-    
-    for filtro in st.session_state.filtros_ranking:
-        campo = filtro['campo']
-        operador = filtro['operador']
-        valor = filtro['valor']
-        
-        if campo in df_filtrado.columns:
-            if operador == 'contiene':
-                if valor:
-                    df_filtrado = df_filtrado[
-                        df_filtrado[campo].str.contains(str(valor), case=False, na=False)
-                    ]
-            elif operador == '==':
-                df_filtrado = df_filtrado[df_filtrado[campo] == valor]
-            elif operador == '>':
-                df_filtrado = df_filtrado[df_filtrado[campo] > valor]
-            elif operador == '>=':
-                df_filtrado = df_filtrado[df_filtrado[campo] >= valor]
-            elif operador == '<':
-                df_filtrado = df_filtrado[df_filtrado[campo] < valor]
-            elif operador == '<=':
-                df_filtrado = df_filtrado[df_filtrado[campo] <= valor]
+    df_filtrado = apply_dynamic_filters(df_rankingExoplanetas, st.session_state.filtros_ranking)
     
     if len(df_filtrado) > 0:
         tab1, tab2, tab3, tab4 = st.tabs(["📋 Datos", "📊 Análisis del índice", "📈 Distribución y boxplot", "🔗 Relaciones"])
         
         with tab1:
-            col_titulo, col_agregar, col_limpiar = st.columns([4, 1.5, 1.5])
-            with col_titulo:
-                st.subheader("🔍 Filtros Avanzados")
-            
-            with col_agregar:
-                if st.button("➕ Agregar Filtro", key="add_filter_rank", use_container_width=True):
-                    st.session_state.filtros_ranking.append({
-                        'campo': 'pl_name',
-                        'operador': 'contiene',
-                        'valor': ''
-                    })
-                    st.rerun()
-            
-            with col_limpiar:
-                if st.button("🗑️ Limpiar Todo", key="clear_filters_rank", use_container_width=True):
-                    st.session_state.filtros_ranking = []
-                    st.rerun()
-            
-            if len(st.session_state.filtros_ranking) > 0:
-                st.markdown("**Filtros activos:**")
-                
-                filtros_a_eliminar = []
-                
-                for idx, filtro in enumerate(st.session_state.filtros_ranking):
-                    campo_actual = filtro['campo']
-                    es_texto = campo_actual in ['pl_name', 'hostname']
-                    if es_texto:
-                        resumen = f"🔹 Filtro {idx + 1}: {nombres_columnas_ranking.get(campo_actual, campo_actual)} contiene '{filtro['valor']}'"
-                    else:
-                        resumen = f"🔹 Filtro {idx + 1}: {nombres_columnas_ranking.get(campo_actual, campo_actual)} {filtro['operador']} {filtro['valor']}"
-                    
-                    with st.expander(resumen, expanded=True):
-                        col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
-                        
-                        with col1:
-                            campos_texto = ['pl_name', 'hostname']
-                            campos_numericos_ranking = ['ranking', 'indice_habitabilidad', 'distancia_tierra'] + num_cols
-                            campos_disponibles = campos_texto + campos_numericos_ranking
-                            campos_disponibles_natural = [nombres_columnas_ranking.get(col, col) for col in campos_disponibles]
-                            campo_actual_natural = nombres_columnas_ranking.get(filtro['campo'], filtro['campo'])
-                            
-                            campo_seleccionado = st.selectbox(
-                                "Campo:",
-                                options=campos_disponibles_natural,
-                                index=campos_disponibles_natural.index(campo_actual_natural) if campo_actual_natural in campos_disponibles_natural else 0,
-                                key=f"campo_rank_{idx}"
-                            )
-                            nuevo_campo = nombres_tecnicos_ranking.get(campo_seleccionado, campo_seleccionado)
-                            
-                            campo_anterior = filtro.get('campo')
-                            es_texto_anterior = campo_anterior in ['pl_name', 'hostname']
-                            es_texto_nuevo = nuevo_campo in ['pl_name', 'hostname']
-                            
-                            if campo_anterior != nuevo_campo and es_texto_anterior != es_texto_nuevo:
-                                if es_texto_nuevo:
-                                    filtro['valor'] = ''
-                                    filtro['operador'] = 'contiene'
-                                else:
-                                    filtro['valor'] = 0.0
-                                    filtro['operador'] = '>='
-                            
-                            filtro['campo'] = nuevo_campo
-                        
-                        campo_tecnico = filtro['campo']
-                        es_campo_texto = campo_tecnico in ['pl_name', 'hostname']
-                        
-                        with col2:
-                            if es_campo_texto:
-                                st.text_input(
-                                    "Operador:",
-                                    value="contiene",
-                                    disabled=True,
-                                    key=f"operador_rank_{idx}"
-                                )
-                                filtro['operador'] = 'contiene'
-                            else:
-                                operadores = {
-                                    'Igual a (=)': '==',
-                                    'Mayor que (>)': '>',
-                                    'Mayor o igual (≥)': '>=',
-                                    'Menor que (<)': '<',
-                                    'Menor o igual (≤)': '<='
-                                }
-                                
-                                operador_filtro = filtro.get('operador', '>=')
-                                if operador_filtro == 'contiene':
-                                    operador_filtro = '>='
-                                
-                                operador_actual = [k for k, v in operadores.items() if v == operador_filtro]
-                                operador_actual = operador_actual[0] if operador_actual else 'Mayor o igual (≥)'
-                                
-                                operador_seleccionado = st.selectbox(
-                                    "Operador:",
-                                    options=list(operadores.keys()),
-                                    index=list(operadores.keys()).index(operador_actual) if operador_actual in list(operadores.keys()) else 0,
-                                    key=f"operador_rank_{idx}"
-                                )
-                                filtro['operador'] = operadores[operador_seleccionado]
-                        
-                        with col3:
-                            if campo_tecnico in df_rankingExoplanetas.columns:
-                                if es_campo_texto:
-                                    valor = st.text_input(
-                                        "Valor:",
-                                        value=str(filtro.get('valor', '')),
-                                        placeholder="Escribe para buscar...",
-                                        key=f"valor_rank_{idx}"
-                                    )
-                                    filtro['valor'] = valor
-                                else:
-                                    max_val = float(df_rankingExoplanetas[campo_tecnico].max())
-                                    
-                                    try:
-                                        valor_actual = float(filtro.get('valor', 0.0))
-                                    except (ValueError, TypeError):
-                                        valor_actual = 0.0
-                                    valor_actual = max(0.0, min(max_val, valor_actual))
-                                    
-                                    valor = st.number_input(
-                                        "Valor:",
-                                        min_value=0.0,
-                                        max_value=max_val,
-                                        value=valor_actual,
-                                        key=f"valor_rank_{idx}",
-                                        format="%.4f" if campo_tecnico in ['indice_habitabilidad', 'distancia_tierra'] else "%.2f"
-                                    )
-                                    filtro['valor'] = valor
-                        
-                        with col4:
-                            if st.button("❌", key=f"eliminar_rank_{idx}", help="Eliminar este filtro"):
-                                filtros_a_eliminar.append(idx)
-                
-                if filtros_a_eliminar:
-                    for idx in sorted(filtros_a_eliminar, reverse=True):
-                        st.session_state.filtros_ranking.pop(idx)
-                    st.rerun()
-            else:
-                st.info("💡 Haz clic en '➕ Agregar Filtro' para crear filtros personalizados")
+            render_dynamic_filters(
+                df_source=df_rankingExoplanetas,
+                filters_key="filtros_ranking",
+                key_prefix="ranking",
+                nombres_columnas_map=nombres_columnas_ranking,
+                nombres_tecnicos_map=nombres_tecnicos_ranking,
+                text_fields=['pl_name', 'hostname'],
+                numeric_fields=['ranking', 'indice_habitabilidad', 'distancia_tierra'] + num_cols
+            )
+
+            df_filtrado = apply_dynamic_filters(df_rankingExoplanetas, st.session_state.filtros_ranking)
             
             st.markdown("---")
             
@@ -865,6 +884,27 @@ elif pagina == "🏠 Índice de Habitabilidad":
             st.caption(f"🏆 Mostrando **{len(df_filtrado)}** de {len(df_rankingExoplanetas)} exoplanetas | "
                       f"⭐ {df_filtrado['hostname'].nunique()} estrellas únicas | "
                       f"🎯 Índice promedio: {df_filtrado['indice_habitabilidad'].mean():.4f}")
+
+            with st.expander("🧭 Trazabilidad de variables (_raw vs _norm)", expanded=False):
+                planeta_sel = st.selectbox(
+                    "Planeta",
+                    options=df_filtrado['pl_name'].tolist(),
+                    key="trace_planet"
+                )
+                vars_sel = st.multiselect(
+                    "Variables",
+                    options=num_cols,
+                    default=num_cols[:5],
+                    key="trace_vars"
+                )
+                if vars_sel:
+                    fila = df_rankingExoplanetas.loc[df_rankingExoplanetas['pl_name'] == planeta_sel].iloc[0]
+                    df_trace = pd.DataFrame({
+                        "variable": vars_sel,
+                        "valor_raw": [fila[f"{c}_raw"] for c in vars_sel],
+                        "valor_norm": [fila[f"{c}_norm"] for c in vars_sel]
+                    })
+                    st.dataframe(df_trace, use_container_width=True, hide_index=True)
         
         with tab2:
             st.subheader("📊 Análisis del Índice de Habitabilidad")
@@ -973,22 +1013,15 @@ elif pagina == "🎯 Vector de Referencia":
     
     st.markdown("---")
     
-    col_reset, col_recalc = st.columns([1, 1])
+    col_reset, col_info = st.columns([1, 1])
     
     with col_reset:
         if st.button("🔄 Restaurar Valores de la Tierra", use_container_width=True):
             st.session_state.earth_values = default_earth_values.copy()
             st.rerun()
     
-    with col_recalc:
-        if st.button("🔬 Recalcular Índice de Habitabilidad", type="primary", use_container_width=True):
-            with st.spinner("Recalculando índices de habitabilidad..."):
-                st.session_state.df_rankingExoplanetas = Calcular_indices_habitabilidad(
-                    df_final, 
-                    st.session_state.earth_values
-                )
-            st.success("✅ Índice recalculado exitosamente")
-            st.rerun()
+    with col_info:
+        st.info("ℹ️ El ranking se recalcula automáticamente al cambiar el vector de referencia.")
     
     st.subheader("🪐 Parámetros Orbitales")
     col1, col2, col3 = st.columns(3)
@@ -1291,7 +1324,6 @@ elif pagina == "⭐ Características Estelares":
         ax.set_xlabel('Temperatura Estelar (K)', fontsize=12)
         ax.set_ylabel('Luminosidad (Log)', fontsize=12)
         ax.set_title('Diagrama HR (Temperatura-Luminosidad)', fontsize=14, fontweight='bold')
-        ax.set_yscale('log')
         plt.colorbar(scatter, label='Edad Estelar (Gyr)', ax=ax)
         st.pyplot(fig)
     
@@ -1491,7 +1523,15 @@ elif pagina == "🪐 Planeta Ficticio":
         distancia, indice = calcular_indice_individual(
             valor_planeta,
             st.session_state.earth_values,
-            df_final
+            df_final,
+            num_cols,
+            p_low=int(st.session_state.sensitivity_params["p_low"]),
+            p_high=int(st.session_state.sensitivity_params["p_high"]),
+            family_weights={
+                "orbita": float(st.session_state.sensitivity_params["weight_orbita"]),
+                "planeta": float(st.session_state.sensitivity_params["weight_planeta"]),
+                "estrella": float(st.session_state.sensitivity_params["weight_estrella"])
+            }
         )
         
         mejores = (df_rankingExoplanetas['indice_habitabilidad'] > indice).sum()

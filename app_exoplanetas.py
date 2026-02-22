@@ -397,7 +397,8 @@ def render_dynamic_filters(
     nombres_columnas_map,
     nombres_tecnicos_map,
     text_fields,
-    numeric_fields
+    numeric_fields,
+    reset_on_clear=None
 ):
     if filters_key not in st.session_state:
         st.session_state[filters_key] = []
@@ -435,6 +436,9 @@ def render_dynamic_filters(
             st.rerun()
     with col_limpiar:
         if st.button("🗑️ Limpiar Todo", key=f"clear_{key_prefix}", use_container_width=True):
+            if reset_on_clear:
+                for state_key, state_value in reset_on_clear.items():
+                    st.session_state[state_key] = state_value.copy() if isinstance(state_value, dict) else state_value
             st.session_state[filters_key] = []
             st.rerun()
 
@@ -853,7 +857,8 @@ elif pagina == "🏠 Índice de Habitabilidad":
                 nombres_columnas_map=nombres_columnas_ranking,
                 nombres_tecnicos_map=nombres_tecnicos_ranking,
                 text_fields=['pl_name', 'hostname'],
-                numeric_fields=['ranking', 'indice_habitabilidad', 'distancia_tierra'] + num_cols
+                numeric_fields=['ranking', 'indice_habitabilidad', 'distancia_tierra'] + num_cols,
+                reset_on_clear={"sensitivity_params": DEFAULT_SENSITIVITY.copy()}
             )
 
             df_filtrado = apply_dynamic_filters(df_rankingExoplanetas, st.session_state.filtros_ranking)

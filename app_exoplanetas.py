@@ -905,7 +905,7 @@ elif pagina == "🏠 Índice de Habitabilidad":
                 if vars_sel:
                     fila = df_rankingExoplanetas.loc[df_rankingExoplanetas['pl_name'] == planeta_sel].iloc[0]
                     df_trace = pd.DataFrame({
-                        "variable": vars_sel,
+                        "Variable": [nombres_columnas.get(c, c) for c in vars_sel],
                         "valor_raw": [fila[f"{c}_raw"] for c in vars_sel],
                         "valor_norm": [fila[f"{c}_norm"] for c in vars_sel]
                     })

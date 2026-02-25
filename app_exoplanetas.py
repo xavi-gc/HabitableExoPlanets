@@ -294,7 +294,16 @@ def gestionar_outliers(df_work, cols, threshold=1.5):
     return df_wins
 
 @st.cache_data
-def calcular_indices_habitabilidad(df_final, num_cols, reference_vector, p_low=1, p_high=99, family_weights=None):
+def calcular_indices_habitabilidad(
+    df_final,
+    num_cols,
+    reference_vector,
+    p_low=1,
+    p_high=99,
+    family_weights=None,
+    df_original=None,
+    df_csv=None
+):
     if family_weights is None:
         family_weights = {"orbita": 1.0, "planeta": 1.0, "estrella": 1.0}
 
@@ -304,13 +313,31 @@ def calcular_indices_habitabilidad(df_final, num_cols, reference_vector, p_low=1
     rango_tipico = (p_high_q - p_low_q).clip(lower=1e-9)
     
     df_rankingExoplanetas = df_final.copy()
+    csv_by_index = None
+    if df_csv is not None:
+        csv_by_index = df_csv.copy()
+    original_by_index = None
+    if df_original is not None:
+        # Keep original values aligned by row index (same pipeline rows before winsorization).
+        # This avoids objectid collisions that can map to the wrong planet.
+        original_by_index = df_original.copy()
     
     norm_cols = []
     for col in num_cols:
         x_ref = vector_referencia[col]
         rango = rango_tipico[col]
+        csv_col = f"{col}_csv"
+        imputado_col = f"{col}_imputado"
         raw_col = f"{col}_raw"
         norm_col = f"{col}_norm"
+        if csv_by_index is not None and col in csv_by_index.columns:
+            df_rankingExoplanetas[csv_col] = csv_by_index[col].reindex(df_rankingExoplanetas.index).values
+        else:
+            df_rankingExoplanetas[csv_col] = np.nan
+        if original_by_index is not None and col in original_by_index.columns:
+            df_rankingExoplanetas[imputado_col] = original_by_index[col].reindex(df_rankingExoplanetas.index).values
+        else:
+            df_rankingExoplanetas[imputado_col] = df_rankingExoplanetas[col]
         df_rankingExoplanetas[raw_col] = df_rankingExoplanetas[col]
         df_rankingExoplanetas[norm_col] = (df_rankingExoplanetas[col] - x_ref) / rango
         norm_cols.append(norm_col)
@@ -397,7 +424,8 @@ def render_dynamic_filters(
     nombres_columnas_map,
     nombres_tecnicos_map,
     text_fields,
-    numeric_fields
+    numeric_fields,
+    reset_on_clear=None
 ):
     if filters_key not in st.session_state:
         st.session_state[filters_key] = []
@@ -435,6 +463,9 @@ def render_dynamic_filters(
             st.rerun()
     with col_limpiar:
         if st.button("🗑️ Limpiar Todo", key=f"clear_{key_prefix}", use_container_width=True):
+            if reset_on_clear:
+                for state_key, state_value in reset_on_clear.items():
+                    st.session_state[state_key] = state_value.copy() if isinstance(state_value, dict) else state_value
             st.session_state[filters_key] = []
             st.rerun()
 
@@ -590,6 +621,8 @@ if 'earth_values' not in st.session_state:
 
 if 'sensitivity_params' not in st.session_state:
     st.session_state.sensitivity_params = DEFAULT_SENSITIVITY.copy()
+if 'sensitivity_draft' not in st.session_state:
+    st.session_state.sensitivity_draft = st.session_state.sensitivity_params.copy()
 
 sensitivity = st.session_state.sensitivity_params
 
@@ -617,7 +650,9 @@ df_rankingExoplanetas = calcular_indices_habitabilidad(
     st.session_state.earth_values,
     p_low=int(sensitivity["p_low"]),
     p_high=int(sensitivity["p_high"]),
-    family_weights=family_weights
+    family_weights=family_weights,
+    df_original=df_work,
+    df_csv=df_reduced
 )
 
 df_ranking_baseline = calcular_indices_habitabilidad(
@@ -630,7 +665,9 @@ df_ranking_baseline = calcular_indices_habitabilidad(
         "orbita": DEFAULT_SENSITIVITY["weight_orbita"],
         "planeta": DEFAULT_SENSITIVITY["weight_planeta"],
         "estrella": DEFAULT_SENSITIVITY["weight_estrella"]
-    }
+    },
+    df_original=df_work,
+    df_csv=df_reduced
 )
 
 nombres_columnas = {
@@ -768,63 +805,77 @@ if pagina == "📊 Dataset de Exoplanetas":
 elif pagina == "🏠 Índice de Habitabilidad":
     if 'filtros_ranking' not in st.session_state:
         st.session_state.filtros_ranking = []
+    if 'sensitivity_draft' not in st.session_state:
+        st.session_state.sensitivity_draft = st.session_state.sensitivity_params.copy()
 
     with st.expander("⚙️ Sensibilidad del índice", expanded=False):
+        draft = st.session_state.sensitivity_draft
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.session_state.sensitivity_params["winsor_threshold"] = st.slider(
+            draft["winsor_threshold"] = st.slider(
                 "Winsor (Tukey IQR)",
                 min_value=0.5,
                 max_value=3.0,
-                value=float(st.session_state.sensitivity_params["winsor_threshold"]),
+                value=float(draft["winsor_threshold"]),
                 step=0.1
             )
-            st.session_state.sensitivity_params["weight_orbita"] = st.slider(
+            draft["weight_orbita"] = st.slider(
                 "Peso órbita",
                 min_value=0.0,
                 max_value=3.0,
-                value=float(st.session_state.sensitivity_params["weight_orbita"]),
+                value=float(draft["weight_orbita"]),
                 step=0.1
             )
         with col2:
-            st.session_state.sensitivity_params["p_low"] = st.slider(
+            draft["p_low"] = st.slider(
                 "Percentil inferior",
                 min_value=0,
                 max_value=20,
-                value=int(st.session_state.sensitivity_params["p_low"]),
+                value=int(draft["p_low"]),
                 step=1
             )
-            st.session_state.sensitivity_params["weight_planeta"] = st.slider(
+            draft["weight_planeta"] = st.slider(
                 "Peso planeta",
                 min_value=0.0,
                 max_value=3.0,
-                value=float(st.session_state.sensitivity_params["weight_planeta"]),
+                value=float(draft["weight_planeta"]),
                 step=0.1
             )
         with col3:
-            min_p_high = int(st.session_state.sensitivity_params["p_low"]) + 1
-            st.session_state.sensitivity_params["p_high"] = st.slider(
+            min_p_high = int(draft["p_low"]) + 1
+            draft["p_high"] = st.slider(
                 "Percentil superior",
                 min_value=min_p_high,
                 max_value=100,
-                value=max(int(st.session_state.sensitivity_params["p_high"]), min_p_high),
+                value=max(int(draft["p_high"]), min_p_high),
                 step=1
             )
-            st.session_state.sensitivity_params["weight_estrella"] = st.slider(
+            draft["weight_estrella"] = st.slider(
                 "Peso estrella",
                 min_value=0.0,
                 max_value=3.0,
-                value=float(st.session_state.sensitivity_params["weight_estrella"]),
+                value=float(draft["weight_estrella"]),
                 step=0.1
             )
 
-        st.session_state.sensitivity_params["stability_top_n"] = st.slider(
+        draft["stability_top_n"] = st.slider(
             "Top-N para estabilidad",
             min_value=5,
             max_value=200,
-            value=int(st.session_state.sensitivity_params["stability_top_n"]),
+            value=int(draft["stability_top_n"]),
             step=5
         )
+
+        c_apply, c_reset = st.columns([1, 1])
+        with c_apply:
+            if st.button("🔄 Actualizar índice", use_container_width=True, type="primary"):
+                st.session_state.sensitivity_params = st.session_state.sensitivity_draft.copy()
+                st.rerun()
+        with c_reset:
+            if st.button("↩️ Restaurar sensibilidad por defecto", use_container_width=True):
+                st.session_state.sensitivity_params = DEFAULT_SENSITIVITY.copy()
+                st.session_state.sensitivity_draft = DEFAULT_SENSITIVITY.copy()
+                st.rerun()
 
         overlap_pct, spearman = compute_topn_stability(
             df_rankingExoplanetas,
@@ -838,7 +889,7 @@ elif pagina == "🏠 Índice de Habitabilidad":
             spearman_txt = "N/A" if pd.isna(spearman) else f"{spearman:.3f}"
             st.metric("Spearman ranking vs base", spearman_txt)
 
-        st.caption("El ranking se recalcula automáticamente con estos parámetros.")
+        st.caption("El ranking se recalcula cuando pulsas 'Actualizar índice'.")
     
     df_filtrado = apply_dynamic_filters(df_rankingExoplanetas, st.session_state.filtros_ranking)
     
@@ -853,7 +904,11 @@ elif pagina == "🏠 Índice de Habitabilidad":
                 nombres_columnas_map=nombres_columnas_ranking,
                 nombres_tecnicos_map=nombres_tecnicos_ranking,
                 text_fields=['pl_name', 'hostname'],
-                numeric_fields=['ranking', 'indice_habitabilidad', 'distancia_tierra'] + num_cols
+                numeric_fields=['ranking', 'indice_habitabilidad', 'distancia_tierra'] + num_cols,
+                reset_on_clear={
+                    "sensitivity_params": DEFAULT_SENSITIVITY.copy(),
+                    "sensitivity_draft": DEFAULT_SENSITIVITY.copy()
+                }
             )
 
             df_filtrado = apply_dynamic_filters(df_rankingExoplanetas, st.session_state.filtros_ranking)
@@ -900,7 +955,9 @@ elif pagina == "🏠 Índice de Habitabilidad":
                 if vars_sel:
                     fila = df_rankingExoplanetas.loc[df_rankingExoplanetas['pl_name'] == planeta_sel].iloc[0]
                     df_trace = pd.DataFrame({
-                        "variable": vars_sel,
+                        "Variable": [nombres_columnas.get(c, c) for c in vars_sel],
+                        "valor_csv": [fila[f"{c}_csv"] for c in vars_sel],
+                        "valor_imputado": [fila[f"{c}_imputado"] for c in vars_sel],
                         "valor_raw": [fila[f"{c}_raw"] for c in vars_sel],
                         "valor_norm": [fila[f"{c}_norm"] for c in vars_sel]
                     })
